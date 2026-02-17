@@ -1,8 +1,6 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+"""Items-related routes for fetching and managing items."""
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from utils.constants import APP_ENVIRONMENT
-from resources.search_fuzz import search_fuzz as search_fuzz_fuzzy
 from services.itemService import (
     fetch_estimator_items,
     fetch_items_from_qdrant_by_identifiers,
@@ -14,23 +12,11 @@ from services.itemService import (
     fetch_estimator_items_vishanti,
     fetch_items_view,
 )
-from services.ingestVishantiDump import ingest_to_qdrant_vishanti
-from services.authService import get_auth_token as auth_get_auth_token
-from services.ingestService import ingest_data_to_qdrant, add_items_to_qdrant
-app = FastAPI()
+from services.ingestService import add_items_to_qdrant
+from utils.constants import APP_ENVIRONMENT
+from utils.dtos import EstimatorItemDTO
 
-# Allow the static frontend (different port) to call this API from the browser.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-class Query(BaseModel):
-    query: str
+router = APIRouter()
 
 
 class EstimatorItemBody(BaseModel):
@@ -41,37 +27,7 @@ class EstimatorItemBody(BaseModel):
     image: str = ""
 
 
-@app.get("/search-fuzz")
-def search_fuzz_endpoint(query: str = ""):
-    return search_fuzz_fuzzy(query)
-
-@app.post("/search")
-def search(q: Query):
-    """
-    Legacy search endpoint (deprecated).
-
-    This endpoint is kept for backward compatibility but does not perform actual search.
-    Use GET /search-items instead.
-
-    Args:
-        q: Query object with query string.
-
-    Returns:
-        dict: {"received": "<query>"} - just echoes the query.
-    """
-    return {"received": q.query}
-
-
-@app.get("/config")
-def get_config():
-    """
-    Return app configuration including current environment (single source of truth).
-    Used by frontend and scripts to read APP_ENVIRONMENT.
-    """
-    return {"environment": APP_ENVIRONMENT}
-
-
-@app.get("/fetch-items")
+@router.get("/fetch-items")
 def fetch_items(environment_name: str | None = None):
     """
     Fetch estimator items from external API.
@@ -86,23 +42,7 @@ def fetch_items(environment_name: str | None = None):
     return fetch_estimator_items(env)
 
 
-@app.post("/ingest")
-async def ingest(environment_name: str | None = None):
-    """
-    Ingest estimator items from external API into Qdrant database.
-
-    Uses APP_ENVIRONMENT from constants when environment_name is not provided.
-
-    Example:
-        POST /ingest
-        POST /ingest?environment_name=uat
-    """
-    env = environment_name or APP_ENVIRONMENT
-    ingest_data_to_qdrant(env)
-    return await ingest_to_qdrant_vishanti(env)
- 
-
-@app.get("/vishanti-items")
+@router.get("/vishanti-items")
 def fetch_vishanti_items_from_qdrant():
     """
     Fetch all items from the VISHANTI Qdrant collection.
@@ -113,7 +53,7 @@ def fetch_vishanti_items_from_qdrant():
     return fetch_estimator_items_vishanti()
 
 
-@app.get("/vishanti-items-view")
+@router.get("/vishanti-items-view")
 def fetch_vishanti_items_view(itemIdentifier: str | None = None):
     """
     Aggregated view of Vishanti items with per-sqft or per-unit price statistics.
@@ -134,7 +74,7 @@ def fetch_vishanti_items_view(itemIdentifier: str | None = None):
     return fetch_items_view(item_identifier=itemIdentifier)
 
 
-@app.post("/add-items-to-qdrant")
+@router.post("/add-items-to-qdrant")
 def add_items_to_qdrant_endpoint(items: list[EstimatorItemBody] | None = None):
     """
     Add one or more estimator items directly to Qdrant collection.
@@ -170,7 +110,6 @@ def add_items_to_qdrant_endpoint(items: list[EstimatorItemBody] | None = None):
             }
         ]
     """
-    from utils.dtos import EstimatorItemDTO
     item_list = items if items is not None else []
     dto_list = [
         EstimatorItemDTO(name=i.name, typeIdentifier=i.typeIdentifier,
@@ -180,16 +119,7 @@ def add_items_to_qdrant_endpoint(items: list[EstimatorItemBody] | None = None):
     return add_items_to_qdrant(dto_list)
 
 
-@app.get("/get-auth-token")
-def get_auth_token_endpoint(environment_name: str | None = None):
-    """
-    Fetch authentication token. Uses APP_ENVIRONMENT when environment_name is not provided.
-    """
-    env = environment_name or APP_ENVIRONMENT
-    return {"access_token": auth_get_auth_token(env)}
-
-
-@app.get("/extract-item")
+@router.get("/extract-item")
 def extract_item_endpoint(query: str = ""):
     """
     Extract a single canonical item name from a search query.
@@ -222,7 +152,7 @@ def extract_item_endpoint(query: str = ""):
     return {"itemName": result}
 
 
-@app.get("/extract-items-with-identifiers")
+@router.get("/extract-items-with-identifiers")
 def extract_items_with_identifiers_endpoint(query: str = ""):
     """
     Extract all matching item names from a query with their identifiers.
@@ -258,7 +188,7 @@ def extract_items_with_identifiers_endpoint(query: str = ""):
     return extract_items_with_identifiers_from_query(query)
 
 
-@app.get("/extract-items-with-identifiers-fuzzy")
+@router.get("/extract-items-with-identifiers-fuzzy")
 def extract_items_with_identifiers_fuzzy_endpoint(query: str = "", fuzzy_cutoff: float = 0.75):
     """
     Extract matching item names with identifiers using fuzzy matching for typos.
@@ -297,7 +227,7 @@ def extract_items_with_identifiers_fuzzy_endpoint(query: str = "", fuzzy_cutoff:
     return extract_items_with_identifiers_from_query_fuzzy(query, fuzzy_cutoff=fuzzy_cutoff)
 
 
-@app.get("/items-by-identifiers")
+@router.get("/items-by-identifiers")
 def items_by_identifiers_endpoint(identifiers: str = ""):
     """
     Fetch estimator items from Qdrant database by their identifiers.
@@ -336,58 +266,7 @@ def items_by_identifiers_endpoint(identifiers: str = ""):
     return fetch_items_from_qdrant_by_identifiers(id_list)
 
 
-@app.get("/search-items")
-def search_items_endpoint(query: str = ""):
-    """
-    Main search endpoint: search for items by query and return from Qdrant.
-
-    Complete search workflow:
-    1. Extracts item names and identifiers from query using fuzzy matching
-       (handles typos like "bichana" -> "bichhana" -> "bed")
-    2. Collects all unique identifiers from matched items
-    3. Fetches actual item data from Qdrant by those identifiers
-    4. Returns items in EstimatorResponseDTO format
-
-    This is the primary endpoint used by the frontend search UI. It combines
-    multilingual query extraction with Qdrant database lookup.
-
-    Args:
-        query: Search query string. Can be in any supported language (Hindi, Bengali,
-            Tamil, Telugu, Kannada, Malayalam) or English. Supports typos via fuzzy matching.
-            Examples: "bed", "sofa set", "bichana" (typo), "स्टडी टेबल"
-
-    Returns:
-        EstimatorResponseDTO: Response containing:
-            - result.response: ApiResponseMetaDTO (status="SUCCESS", statusCode=200)
-            - result.data: List of EstimatorItemDTO matching the query
-                Each item has: name, typeIdentifier, identifier, image
-
-    Raises:
-        HTTPException: If Qdrant query fails or extraction fails.
-
-    Example:
-        GET /search-items?query=bed
-        Response: {
-            "result": {
-                "response": {"status": "SUCCESS", "statusCode": 200, ...},
-                "data": [
-                    {"name": "Bed", "typeIdentifier": "...", "identifier": "BED_ITM_NW", "image": "..."}
-                ]
-            }
-        }
-
-        GET /search-items?query=bichana  # typo still works
-        Response: {
-            "result": {
-                "response": {"status": "SUCCESS", ...},
-                "data": [{"name": "Bed", ...}]  # finds "bed" despite typo
-            }
-        }
-    """
-    return search_items_by_query(query)
-
-
-@app.post("/items-with-identifiers")
+@router.post("/items-with-identifiers")
 def write_item_to_items_with_identifiers_endpoint(body: dict):
     """
     Add or update an item in resources/items_with_identifiers.json.

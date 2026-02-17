@@ -76,7 +76,6 @@ def enrich_items_with_identifiers(
             updated[item_name] = enriched
         else:
             unmatched.append(item_name)
-            updated[item_name] = langs
 
     # Write JSON: one line per language (compact), then "identifiers" last
     def dump_compact(obj):

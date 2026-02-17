@@ -6,7 +6,7 @@ WORKDIR /app
 ARG APP_ENVIRONMENT=dev
 ENV APP_ENVIRONMENT=${APP_ENVIRONMENT}
 
-COPY resources/requirements.txt .
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .

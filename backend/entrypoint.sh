@@ -53,7 +53,7 @@ echo "Running fetch_cities.py..."
 python scripts/fetch_cities.py || true
 
 echo "Starting uvicorn..."
-uvicorn controller:app --host 0.0.0.0 --port 8090 &
+uvicorn routes.controller:app --host 0.0.0.0 --port 8090 &
 UVICORN_PID=$!
 wait $UVICORN_PID
 cleanup

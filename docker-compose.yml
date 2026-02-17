@@ -23,7 +23,7 @@ services:
     volumes:
       - /Users/chayanchakraborty/Downloads/shared-key.pem:/run/secrets/shared-key.pem:ro
       # Share backend/resources on host with /app/resources in container
-      - /Users/chayanchakraborty/Documents/python_new_dir/voice-text-search-platform/backend/resources:/app/resources
+      - /Users/chayanchakraborty/Documents/python_new_dir/Estimator-Items-Analytics/backend/resources:/app/resources
     ports:
       - "8090:8090"
 
