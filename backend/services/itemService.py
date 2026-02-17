@@ -983,3 +983,189 @@ def fetch_items_view(
         )
 
     return result
+
+
+def fetch_items_view_by_city(
+    item_identifiers: list[str],
+    city: str | None = None
+) -> list[VishantiAggregatedItemDTO]:
+    """
+    Build a consolidated view of Vishanti items filtered by city.
+    
+    Similar to fetch_items_view but:
+    - Accepts multiple item identifiers
+    - Filters results by specified city
+    
+    Args:
+        item_identifiers: List of item identifier strings to fetch
+        city: City name to filter by (will be normalized for matching)
+    
+    Returns:
+        list[VishantiAggregatedItemDTO]: Items with areaStats filtered to the specified city
+    """
+    if not item_identifiers:
+        return []
+    
+    # Normalize the requested city for matching
+    normalized_city = normalize_city_name(city) if city else None
+    
+    per_item: dict[str, dict] = {}
+    offset = None
+
+    while True:
+        scroll_kwargs = dict(
+            collection_name=COLLECTION_NAME_VISHANTI,
+            limit=1_000,
+            with_payload=True,
+            with_vectors=False,
+            offset=offset,
+        )
+        # Filter by multiple item identifiers
+        scroll_kwargs["scroll_filter"] = Filter(
+            must=[
+                FieldCondition(
+                    key="item_identifier",
+                    match=MatchAny(any=item_identifiers),
+                )
+            ]
+        )
+        records, offset = qdrant.scroll(**scroll_kwargs)
+
+        for rec in records:
+            p = dict(rec.payload) if rec.payload else {}
+            identifier = (p.get("item_identifier") or "").strip()
+            if not identifier:
+                continue
+            area_raw = (p.get("area") or "").strip()
+            if not area_raw:
+                continue
+            
+            # Normalize city name to handle typos/variations
+            area = normalize_city_name(area_raw)
+            
+            # If city filter is specified, skip records not matching
+            if normalized_city and area.lower() != normalized_city.lower():
+                continue
+            
+            amount = float(p.get("amount") or 0)
+            if amount <= 0:
+                continue
+
+            # Filter out items without attributes or with empty attributes
+            attrs_parsed = p.get("attributes_parsed") or {}
+            if not attrs_parsed or (isinstance(attrs_parsed, dict) and len(attrs_parsed) == 0):
+                continue
+
+            # Calculate normalized price (same logic as fetch_items_view)
+            measurement_sqft = float(p.get("measurement_sqft") or 0.0)
+            price_type = "Total"
+            normalized_price = amount
+
+            # First check: if Rate or Rate per Sqft attribute exists, use it directly
+            rate_found = False
+            if attrs_parsed:
+                # Check for "Rate per Sqft" first
+                if "Rate per Sqft" in attrs_parsed:
+                    rate_str = attrs_parsed.get("Rate per Sqft", "").strip()
+                    try:
+                        rate = float(rate_str.split()[0]) if ' ' in rate_str else float(rate_str)
+                        if rate > 0:
+                            price_type = "Per Sqft"
+                            normalized_price = rate
+                            rate_found = True
+                    except (ValueError, TypeError, IndexError):
+                        pass
+                # Check for "Rate" (general rate attribute)
+                elif "Rate" in attrs_parsed:
+                    rate_str = attrs_parsed.get("Rate", "").strip()
+                    try:
+                        rate = float(rate_str.split()[0]) if ' ' in rate_str else float(rate_str)
+                        if rate > 0:
+                            price_type = "Per Sqft"
+                            normalized_price = rate
+                            rate_found = True
+                    except (ValueError, TypeError, IndexError):
+                        pass
+
+            # Second check: if no Rate attribute and measurement_sqft exists and > 0
+            if not rate_found and measurement_sqft > 0:
+                price_type = "Per Sqft"
+                normalized_price = amount / measurement_sqft
+            # Third check: if Quantity exists (LF items), calculate per unit price
+            elif not rate_found and attrs_parsed and "Quantity" in attrs_parsed:
+                qty_str = attrs_parsed.get("Quantity", "").strip()
+                try:
+                    qty = float(qty_str.split()[0]) if ' ' in qty_str else float(qty_str)
+                    if qty > 0:
+                        price_type = "Per Unit"
+                        normalized_price = amount / qty
+                except (ValueError, TypeError, IndexError):
+                    pass
+
+            if identifier not in per_item:
+                img = p.get("image")
+                if isinstance(img, dict) and "default" in img:
+                    img = img["default"]
+                per_item[identifier] = {
+                    "itemName": p.get("item_name") or "",
+                    "itemTypeIdentifier": p.get("item_type_identifier") or "",
+                    "image": img,
+                    "areaGroups": {},  # (area, price_type) -> [normalized_prices...]
+                }
+
+            entry = per_item[identifier]
+            item_name = p.get("item_name") or ""
+            item_type = p.get("item_type_identifier") or ""
+            if not entry["itemName"] and item_name:
+                entry["itemName"] = item_name
+            if not entry["itemTypeIdentifier"] and item_type:
+                entry["itemTypeIdentifier"] = item_type
+            if entry["image"] is None and p.get("image"):
+                img = p.get("image")
+                entry["image"] = img["default"] if isinstance(img, dict) and "default" in img else img
+
+            area_key = (area, price_type)
+            groups = entry["areaGroups"]
+            groups.setdefault(area_key, []).append(normalized_price)
+
+        if not offset:
+            break
+
+    result: list[VishantiAggregatedItemDTO] = []
+
+    for identifier, entry in per_item.items():
+        area_groups = entry["areaGroups"]
+        if not area_groups:
+            continue
+
+        area_stats: list[AreaPriceStatsDTO] = []
+        for (area, price_type), prices in area_groups.items():
+            if not prices:
+                continue
+            min_price = min(prices)
+            max_price = max(prices)
+            avg_price = sum(prices) / len(prices)
+            area_stats.append(
+                AreaPriceStatsDTO(
+                    area=area,
+                    priceType=price_type,
+                    minPrice=min_price,
+                    maxPrice=max_price,
+                    avgPrice=avg_price,
+                )
+            )
+
+        if not area_stats:
+            continue
+
+        result.append(
+            VishantiAggregatedItemDTO(
+                itemName=entry["itemName"],
+                itemIdentifier=identifier,
+                itemTypeIdentifier=entry["itemTypeIdentifier"],
+                image=entry["image"],
+                areaStats=area_stats,
+            )
+        )
+
+    return result

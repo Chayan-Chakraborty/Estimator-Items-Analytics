@@ -11,6 +11,7 @@ from services.itemService import (
     add_item_to_items_with_identifiers,
     fetch_estimator_items_vishanti,
     fetch_items_view,
+    fetch_items_view_by_city,
 )
 from services.ingestService import add_items_to_qdrant
 from utils.constants import APP_ENVIRONMENT
@@ -72,6 +73,66 @@ def fetch_vishanti_items_view(itemIdentifier: str | None = None):
               priceType: "Per Sqft" | "Per Unit" | "Total"
     """
     return fetch_items_view(item_identifier=itemIdentifier)
+
+
+@router.get("/vishanti-items-by-city")
+def fetch_vishanti_items_by_city(itemIdentifiers: str = "", city: str | None = None):
+    """
+    Aggregated view of Vishanti items filtered by city.
+
+    Similar to /vishanti-items-view but:
+    - Accepts multiple item identifiers (comma-separated)
+    - Filters results by specified city
+    - Returns only areaStats for the specified city
+
+    Automatically calculates:
+    - Per sqft pricing for WD items (with Measurement)
+    - Per unit pricing for LF items (with Quantity)
+
+    Args:
+        itemIdentifiers: Comma-separated list of item identifiers (required).
+            Examples: "WAR_ITM_NW", "WAR_ITM_NW,BED_ITM_NW,SOF_ITM_NW"
+        city: City name to filter by (optional). Handles typos and variations.
+            Examples: "Bangalore", "Bengaluru", "Hyderabad"
+            If omitted, returns data for all cities.
+
+    Returns:
+        list[VishantiAggregatedItemDTO]: One entry per item, each containing:
+            - itemName, itemIdentifier, itemTypeIdentifier, image
+            - areaStats: list of { area, priceType, minPrice, maxPrice, avgPrice }
+              Filtered to show only the specified city
+              priceType: "Per Sqft" | "Per Unit" | "Total"
+
+    Example:
+        GET /vishanti-items-by-city?itemIdentifiers=WAR_ITM_NW&city=Bangalore
+        Response: [
+            {
+                "itemName": "Wardrobe",
+                "itemIdentifier": "WAR_ITM_NW",
+                "itemTypeIdentifier": "WD",
+                "image": "...",
+                "areaStats": [
+                    {
+                        "area": "Bangalore",
+                        "priceType": "Per Sqft",
+                        "minPrice": 100.0,
+                        "maxPrice": 27930.0,
+                        "avgPrice": 1099.70
+                    }
+                ]
+            }
+        ]
+
+        GET /vishanti-items-by-city?itemIdentifiers=WAR_ITM_NW,BED_ITM_NW&city=Hyderabad
+        Returns both wardrobe and bed data for Hyderabad only
+    """
+    # Parse comma-separated identifiers
+    id_list = [i.strip() for i in itemIdentifiers.split(",") if i.strip()] if itemIdentifiers else []
+    
+    if not id_list:
+        return []
+    
+    return fetch_items_view_by_city(item_identifiers=id_list, city=city)
 
 
 @router.post("/add-items-to-qdrant")

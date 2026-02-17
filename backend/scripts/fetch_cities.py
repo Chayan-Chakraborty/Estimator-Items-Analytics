@@ -33,7 +33,8 @@ from dbConfig.mysqlConnectionConfig import get_mysql_connection
 from utils.constants import (
     APP_ENVIRONMENT,
     CITY_CSV_PATH,
-    CITY_CANONICAL_MAPPING_PATH
+    CITY_CANONICAL_MAPPING_PATH,
+    RESOURCES_DIR
 )
 
 # -------------------------------------------------
@@ -168,65 +169,148 @@ def write_cities_csv(cities: list[str], output_file: str):
     print(f"✅ Cities written to {output_file}")
 
 
+def load_manual_typos() -> dict:
+    """
+    Load manually curated city typos from city_typos_manual.json
+    
+    Returns:
+        dict: Mapping of canonical city names to their typo variants
+    """
+    manual_typos_path = os.path.join(RESOURCES_DIR, "city_typos_manual.json")
+    
+    if not os.path.exists(manual_typos_path):
+        print(f"   ⚠️  Manual typos file not found: {manual_typos_path}")
+        return {}
+    
+    try:
+        with open(manual_typos_path, "r", encoding="utf-8") as f:
+            typos = json.load(f)
+        print(f"   ✅ Loaded manual typos for {len(typos)} cities")
+        return typos
+    except Exception as e:
+        print(f"   ⚠️  Error loading manual typos: {e}")
+        return {}
+
+
+def find_canonical_match(city_normalized: str, manual_typos: dict) -> str | None:
+    """
+    Find which canonical city a normalized city name belongs to.
+    
+    Handles both exact matches and multi-word cities (e.g., "Bangalore Sarjapur" matches "Bangalore").
+    
+    Args:
+        city_normalized: Normalized city name
+        manual_typos: Manual typo mappings
+        
+    Returns:
+        Canonical city name if match found, None otherwise
+    """
+    # Try exact match first
+    for canonical, variants in manual_typos.items():
+        for variant in variants:
+            if city_normalized == variant.lower():
+                return canonical
+    
+    # Try matching first word for multi-word cities (e.g., "bangalore sarjapur" -> "bangalore")
+    words = city_normalized.split()
+    if len(words) > 1:
+        first_word = words[0]
+        for canonical, variants in manual_typos.items():
+            for variant in variants:
+                if first_word == variant.lower():
+                    return canonical
+    
+    return None
+
+
 def generate_canonical_mapping(cities: list[str], output_file: str):
     """
     Generate a canonical mapping JSON file for city name normalization.
 
-    Creates a mapping from normalized city names to canonical (original) city names.
-    This helps with fuzzy matching and typo tolerance.
+    Merges database cities with manually curated typo variations to create
+    a comprehensive mapping from canonical city names to all their variants.
 
     Structure:
     {
-        "normalized_city_name": "Canonical City Name",
-        "bengaluru": "Bengaluru",
-        "bangalore": "Bengaluru",  # if both exist, we keep first
+        "Bangalore": ["bangalore", "bengaluru", "bengalore", "banglore", ...],
+        "Hyderabad": ["hyderabad", "hydrabad", ...],
         ...
     }
 
     Args:
-        cities: List of city names
+        cities: List of city names from database
         output_file: Path to output JSON file
     """
     if not cities:
         print("⚠️  No cities to generate mapping")
         return
 
-    mapping = {}
-    duplicates = {}
-
+    print("\n   📚 Loading manual typo variations...")
+    manual_typos = load_manual_typos()
+    
+    # Start with manual typos as base (already in correct format)
+    mapping = {canonical: list(variants) for canonical, variants in manual_typos.items()}
+    
+    print(f"   🔍 Processing {len(cities)} cities from database...")
+    
+    # Track new cities not in manual typos
+    new_cities = []
+    matched_count = 0
+    
     for city in cities:
-        normalized = normalize_city(city)
-
-        if not normalized:
+        city_normalized = normalize_city(city).lower()
+        
+        if not city_normalized:
             continue
-
-        if normalized in mapping:
-            # Track duplicates for logging
-            if normalized not in duplicates:
-                duplicates[normalized] = [mapping[normalized]]
-            duplicates[normalized].append(city)
+        
+        # Try to find which canonical city this belongs to
+        canonical_match = find_canonical_match(city_normalized, manual_typos)
+        
+        if canonical_match:
+            # Add to existing canonical city if not already there
+            if city.lower() not in mapping[canonical_match]:
+                mapping[canonical_match].append(city.lower())
+            matched_count += 1
         else:
-            # First occurrence wins as canonical
-            mapping[normalized] = city
-
+            # New city not in manual typos - create new entry
+            # Use proper case version as canonical
+            canonical = city if city[0].isupper() else city.title()
+            
+            if canonical not in mapping:
+                mapping[canonical] = [city.lower()]
+                new_cities.append(canonical)
+            elif city.lower() not in mapping[canonical]:
+                mapping[canonical].append(city.lower())
+    
+    # Sort variants within each canonical for consistency
+    for canonical in mapping:
+        mapping[canonical] = sorted(set(mapping[canonical]))
+    
     # Ensure output directory exists
     output_dir = os.path.dirname(output_file)
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
 
-    # Write JSON (sorted for readability)
+    # Write JSON (sorted by canonical name for readability)
     with open(output_file, "w", encoding="utf-8") as file:
         json.dump(mapping, file, indent=2, ensure_ascii=False, sort_keys=True)
 
-    print(f"✅ Canonical mapping written to {output_file}")
-    print(f"   Total mappings: {len(mapping)}")
-
-    if duplicates:
-        print(f"   ⚠️  Found {len(duplicates)} normalized names with multiple variants:")
-        for norm, variants in list(duplicates.items())[:5]:  # Show first 5
-            print(f"      '{norm}' -> {variants}")
-        if len(duplicates) > 5:
-            print(f"      ... and {len(duplicates) - 5} more")
+    print(f"\n✅ Canonical mapping written to {output_file}")
+    print(f"   📊 Statistics:")
+    print(f"      Total canonical cities: {len(mapping)}")
+    print(f"      Database cities matched to typos: {matched_count}")
+    print(f"      New cities from database: {len(new_cities)}")
+    
+    # Show total variants
+    total_variants = sum(len(variants) for variants in mapping.values())
+    print(f"      Total variants: {total_variants}")
+    
+    # Show examples of cities with most variants
+    cities_by_variant_count = sorted(mapping.items(), key=lambda x: len(x[1]), reverse=True)
+    if cities_by_variant_count:
+        print(f"\n   🏆 Top cities by variant count:")
+        for canonical, variants in cities_by_variant_count[:5]:
+            print(f"      {canonical}: {len(variants)} variant(s)")
 
 
 def fetch_and_generate_city_files(environment: str):

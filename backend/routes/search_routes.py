@@ -1,7 +1,6 @@
 """Search-related routes."""
 from fastapi import APIRouter
 from pydantic import BaseModel
-from resources.search_fuzz import search_fuzz as search_fuzz_fuzzy
 from services.itemService import search_items_by_query
 
 router = APIRouter()
@@ -9,38 +8,6 @@ router = APIRouter()
 
 class Query(BaseModel):
     query: str
-
-
-@router.get("/search-fuzz")
-def search_fuzz_endpoint(query: str = ""):
-    """
-    Fuzzy search endpoint for quick text matching.
-    
-    Args:
-        query: Search query string.
-    
-    Returns:
-        Fuzzy search results.
-    """
-    return search_fuzz_fuzzy(query)
-
-
-@router.post("/search")
-def search(q: Query):
-    """
-    Legacy search endpoint (deprecated).
-
-    This endpoint is kept for backward compatibility but does not perform actual search.
-    Use GET /search-items instead.
-
-    Args:
-        q: Query object with query string.
-
-    Returns:
-        dict: {"received": "<query>"} - just echoes the query.
-    """
-    return {"received": q.query}
-
 
 @router.get("/search-items")
 def search_items_endpoint(query: str = ""):
